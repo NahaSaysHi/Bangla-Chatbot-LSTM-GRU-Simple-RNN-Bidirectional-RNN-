@@ -1,0 +1,130 @@
+#LSTM
+import json
+import numpy as np
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, LSTM, Embedding
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import KFold
+from sklearn.metrics import confusion_matrix, precision_score, recall_score, f1_score, accuracy_score
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+with open('BanglaHealthcareChatbotData.json', 'r', encoding='utf-8') as file:
+    data = json.load(file)
+
+
+training_sentences = []
+training_labels = []
+labels = []
+responses = {}
+
+for intent in data['intents']:
+    for pattern in intent['patterns']:
+        training_sentences.append(pattern)
+        training_labels.append(intent['tag'])
+    responses[intent['tag']] = intent['responses']
+
+    if intent['tag'] not in labels:
+        labels.append(intent['tag'])
+
+
+vocab_size = 1000
+max_len = 20
+oov_tok = "<OOV>"
+
+tokenizer = Tokenizer(num_words=vocab_size, oov_token=oov_tok)
+tokenizer.fit_on_texts(training_sentences)
+word_index = tokenizer.word_index
+sequences = tokenizer.texts_to_sequences(training_sentences)
+padded_sequences = pad_sequences(sequences, maxlen=max_len)
+
+
+le = LabelEncoder()
+encoded_labels = le.fit_transform(training_labels)
+num_classes = len(le.classes_)
+
+
+kfold = KFold(n_splits=5, shuffle=True, random_state=42)
+avg_scores = []
+conf_matrices = np.zeros((num_classes, num_classes))  # Initialize a zero matrix
+metrics = {
+    "precision": [],
+    "recall": [],
+    "f1_score": [],
+    "accuracy": []
+}
+
+for train, test in kfold.split(padded_sequences, encoded_labels):
+    
+    model = Sequential()
+    model.add(Embedding(vocab_size, 16, input_length=max_len))
+    model.add(LSTM(32))
+    model.add(Dense(32, activation='relu'))
+    model.add(Dense(num_classes, activation='softmax'))
+
+    model.compile(loss='sparse_categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+  
+    model.fit(padded_sequences[train], encoded_labels[train], epochs=200, verbose=0)
+
+    test_predictions = model.predict(padded_sequences[test], verbose=0)
+    test_predictions = np.argmax(test_predictions, axis=1)
+    conf_matrix = confusion_matrix(encoded_labels[test], test_predictions, labels=range(num_classes))
+    conf_matrices += conf_matrix  
+
+    
+    precision = precision_score(encoded_labels[test], test_predictions, average='weighted')
+    recall = recall_score(encoded_labels[test], test_predictions, average='weighted')
+    f1 = f1_score(encoded_labels[test], test_predictions, average='weighted')
+    accuracy = accuracy_score(encoded_labels[test], test_predictions)
+
+    metrics["precision"].append(precision)
+    metrics["recall"].append(recall)
+    metrics["f1_score"].append(f1)
+    metrics["accuracy"].append(accuracy)
+
+
+avg_metrics = {metric: np.mean(values) for metric, values in metrics.items()}
+
+
+avg_conf_matrix = conf_matrices / 5  
+
+
+print("Average Metrics Across All Folds:")
+for metric, value in avg_metrics.items():
+    print(f"{metric.capitalize()}: {value:.4f}")
+
+
+plt.figure(figsize=(10,8))
+sns.heatmap(avg_conf_matrix, annot=True, fmt='g')
+plt.title('Average Confusion Matrix')
+plt.ylabel('Actual Label')
+plt.xlabel('Predicted Label')
+plt.show()
+
+
+def chatbot_response(text):
+    sequence = tokenizer.texts_to_sequences([text])
+    padded_sequence = pad_sequences(sequence, maxlen=max_len)
+    prediction = model.predict(padded_sequence)
+    intent_index = np.argmax(prediction)
+    intent = le.inverse_transform([intent_index])[0]
+    return np.random.choice(responses[intent])
+
+# Example
+question = "আপনি কেমন আছেন?"  
+print("Question:", question)
+print("Chatbot's Response:", chatbot_response(question))
+
+
+question = "তুমি কি জানো যে এখন কটা বাজে?"  
+print("Question:", question)
+print("Chatbot's Response:", chatbot_response(question))
+
+
+question = "আমি অসুস্থ বোধ করছি। আপনি কি আমাকে সাহায্য করবেন?" 
+print("Question:", question)
+print("Chatbot's Response:", chatbot_response(question))
+
